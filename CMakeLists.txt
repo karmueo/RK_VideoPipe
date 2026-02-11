@@ -2,7 +2,10 @@ cmake_minimum_required(VERSION 3.4.1)
 
 project(rk_videopipe)
 
-set(CMAKE_BUILD_TYPE "Debug")
+# 默认使用 Release，允许通过 -DCMAKE_BUILD_TYPE 覆盖。
+if (NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE "Release")
+endif ()
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(LIB_ARCH aarch64)
