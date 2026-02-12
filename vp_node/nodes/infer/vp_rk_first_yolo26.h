@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 #include "vp_primary_infer_node.h"
 #include "yolo26.h"
 
@@ -10,6 +12,10 @@ namespace vp_nodes {
 class vp_rk_first_yolo26 : public vp_primary_infer_node {
 private:
     std::shared_ptr<YOLO26> rk_model;  // YOLO26 模型对象。
+    int infer_skip_frames = 0;  // 跳帧推理配置，0 表示不跳帧。
+    int infer_period = 1;  // 推理周期，等于 infer_skip_frames + 1。
+    uint64_t infer_frame_counter = 0;  // 输入帧计数器，用于决定是否执行推理。
+    std::vector<std::shared_ptr<vp_objects::vp_frame_target>> last_targets_cache;  // 上一次推理结果缓存。
 
 protected:
     /**
@@ -41,4 +47,3 @@ public:
     ~vp_rk_first_yolo26();
 };
 }  // namespace vp_nodes
-

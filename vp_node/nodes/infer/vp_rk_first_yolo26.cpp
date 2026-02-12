@@ -1,5 +1,8 @@
 #include "vp_rk_first_yolo26.h"
 
+#include <algorithm>
+#include <chrono>
+#include <fstream>
 #include <stdexcept>
 
 #include "vp_utils/vp_utils.h"
@@ -15,6 +18,19 @@ vp_rk_first_yolo26::vp_rk_first_yolo26(std::string node_name, std::string json_p
                                                          json_path.c_str(),
                                                          ret));
     }
+
+    try {
+        std::ifstream stream(json_path);  // 配置文件输入流。
+        if (stream.is_open()) {
+            json j_conf;  // JSON 配置对象。
+            stream >> j_conf;
+            infer_skip_frames = std::max(0, j_conf.value("infer_skip_frames", 0));
+        }
+    } catch (const std::exception&) {
+        infer_skip_frames = 0;
+    }
+    infer_period = infer_skip_frames + 1;
+
     rk_model = std::make_shared<YOLO26>(conf);
     this->initialized();
 }
@@ -27,6 +43,24 @@ vp_rk_first_yolo26::~vp_rk_first_yolo26() {
 void vp_rk_first_yolo26::run_infer_combinations(
     const std::vector<std::shared_ptr<vp_objects::vp_frame_meta>>& frame_meta_with_batch) {
     assert(frame_meta_with_batch.size() == 1);
+    auto& frame_meta = frame_meta_with_batch[0];  // 当前帧元数据。
+    const bool do_infer = (infer_frame_counter % static_cast<uint64_t>(infer_period) == 0);  // 本帧是否执行真实推理。
+    ++infer_frame_counter;
+
+    if (!do_infer) {
+        for (const auto& cached_target : last_targets_cache) {
+            if (cached_target == nullptr) {
+                continue;
+            }
+            auto target = cached_target->clone();  // 克隆缓存目标，避免跨帧共享对象。
+            target->frame_index = frame_meta->frame_index;
+            target->channel_index = frame_meta->channel_index;
+            frame_meta->targets.push_back(target);
+        }
+        vp_infer_node::infer_combinations_time_cost(static_cast<int>(frame_meta_with_batch.size()), 0, 0, 0, 0);
+        return;
+    }
+
     std::vector<cv::Mat> mats_to_infer;  // 待推理图像容器。
 
     auto start_time = std::chrono::system_clock::now();  // 开始时间戳。
@@ -43,7 +77,6 @@ void vp_rk_first_yolo26::run_infer_combinations(
     auto infer_time = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now() - start_time);  // infer 耗时。
 
-    auto& frame_meta = frame_meta_with_batch[0];  // 当前帧元数据。
     for (const auto& obj : res) {
         auto target = std::make_shared<vp_objects::vp_frame_target>(obj.box.top,
                                                                      obj.box.left,
@@ -55,6 +88,14 @@ void vp_rk_first_yolo26::run_infer_combinations(
                                                                      frame_meta->channel_index,
                                                                      obj.label);
         frame_meta->targets.push_back(target);
+    }
+    last_targets_cache.clear();
+    last_targets_cache.reserve(frame_meta->targets.size());
+    for (const auto& target : frame_meta->targets) {
+        if (target == nullptr) {
+            continue;
+        }
+        last_targets_cache.push_back(target->clone());
     }
 
     vp_infer_node::infer_combinations_time_cost(static_cast<int>(mats_to_infer.size()),
