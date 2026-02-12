@@ -2,7 +2,6 @@
 
 #include <string>
 
-#include <SDL2/SDL.h>
 #include <opencv2/core/core.hpp>
 
 #include "base/vp_src_node.h"
@@ -18,12 +17,10 @@ extern "C" {
 #include "rockchip/rk_vdec_cfg.h"
 
 namespace vp_nodes {
-
 /**
- * @brief 基于 MPP + SDL 的本地文件源节点。
+ * @brief 基于 MPP 的本地文件硬解码源节点。
  *
- * 该节点直接执行 MP4 demux + MPP 硬解 + SDL 渲染，避免 OpenCV VideoCapture/VideoWriter
- * 桥接开销。可选将解码帧转换为 BGR 后下发 frame_meta。
+ * 该节点直接执行 MP4 demux + MPP 硬解码，将解码后的 NV12 数据下发到后续 pipeline。
  */
 class vp_mpp_sdl_src_node : public vp_src_node {
 private:
@@ -33,20 +30,6 @@ private:
     bool cycle = true;
     // 是否按源视频 FPS 节奏显示。
     bool pace_by_src_fps = false;
-    // SDL 渲染是否启用 vsync。
-    bool enable_vsync = false;
-    // 是否禁用 FPS overlay。
-    bool disable_overlay = true;
-    // 是否全屏显示。
-    bool fullscreen = false;
-    // 是否渲染到屏幕。
-    bool render_to_screen = true;
-    // 是否向下游发布 frame_meta。
-    bool publish_frame_meta = false;
-    // SDL 视频驱动名称，空字符串表示自动选择。
-    std::string sdl_video_driver;
-    // SDL 渲染驱动名称，空字符串表示自动选择。
-    std::string sdl_render_driver;
 
     // FFmpeg demux 上下文。
     AVFormatContext* ifmt = nullptr;
@@ -65,15 +48,6 @@ private:
     MppPacket dec_pkt = nullptr;
     // MPP 输出帧缓冲组。
     MppBufferGroup dec_frm_grp = nullptr;
-
-    // SDL 窗口句柄。
-    SDL_Window* sdl_window = nullptr;
-    // SDL 渲染器句柄。
-    SDL_Renderer* sdl_renderer = nullptr;
-    // SDL NV12 纹理句柄。
-    SDL_Texture* sdl_texture = nullptr;
-    // SDL 是否已初始化。
-    bool sdl_inited = false;
 
     // 当前输出宽度。
     int width = 0;
@@ -99,9 +73,6 @@ private:
     uint64_t fps_last_log_us = 0;
     // 上次打印 FPS 时帧计数。
     uint32_t fps_last_log_frames = 0;
-
-    // UI 是否请求退出。
-    bool quit = false;
 
 private:
     /**
@@ -132,41 +103,22 @@ private:
     bool init_decoder();
 
     /**
-     * @brief 基于首帧信息初始化 SDL 渲染资源。
-     * @param frame MPP 输出帧。
-     * @return true 初始化成功；false 失败。
-     */
-    bool init_sdl_for_frame(MppFrame frame);
-
-    /**
-     * @brief 处理 SDL 事件。
-     */
-    void pump_sdl_events();
-
-    /**
      * @brief 打印运行时 FPS。
      */
     void log_runtime_fps();
 
     /**
-     * @brief 把 NV12 帧渲染到 SDL 窗口。
-     * @param frame MPP 输出帧。
-     * @return true 渲染成功；false 失败。
-     */
-    bool render_frame_nv12(MppFrame frame);
-
-    /**
-     * @brief 在 info change 阶段配置解码缓冲并初始化 SDL。
+     * @brief 在 info change 阶段配置解码缓冲。
      * @param frame MPP 输出帧。
      * @return true 配置成功；false 失败。
      */
     bool setup_info_change(MppFrame frame);
 
     /**
-     * @brief 把 NV12 帧转换为 BGR 并可选缩放，输出 frame_meta。
+     * @brief 将 NV12 帧打包并下发到后续节点。
      * @param frame MPP 输出帧。
      */
-    void publish_frame_meta_if_needed(MppFrame frame);
+    void publish_nv12_frame_meta(MppFrame frame);
 
     /**
      * @brief 处理单帧 decode 输出。
@@ -200,13 +152,13 @@ private:
     bool send_to_decoder(const AVPacket* packet, bool eos, bool& got_eos);
 
     /**
-     * @brief 执行一次完整 demux+decode+render 流程。
+     * @brief 执行一次完整 demux+decode 流程。
      * @return true 成功；false 失败。
      */
     bool run_pipeline_once();
 
     /**
-     * @brief 释放 FFmpeg/MPP/SDL 资源。
+     * @brief 释放 FFmpeg/MPP 资源。
      */
     void cleanup();
 
@@ -218,32 +170,18 @@ protected:
 
 public:
     /**
-     * @brief 构造 MPP+SDL 源节点。
+     * @brief 构造 MPP 硬解码源节点。
      * @param node_name 节点名称。
      * @param channel_index 通道索引。
      * @param file_path 输入 MP4 路径。
      * @param cycle 是否循环播放。
      * @param pace_by_src_fps 是否按源 FPS 节奏播放。
-     * @param enable_vsync SDL 是否启用 vsync。
-     * @param disable_overlay 是否关闭 overlay。
-     * @param fullscreen 是否全屏显示。
-     * @param render_to_screen 是否渲染到屏幕。
-     * @param publish_frame_meta 是否向下游发布 frame_meta。
-     * @param sdl_video_driver SDL 视频驱动名称（空表示自动）。
-     * @param sdl_render_driver SDL 渲染驱动名称（空表示自动）。
      */
     vp_mpp_sdl_src_node(std::string node_name,
                         int channel_index,
                         std::string file_path,
                         bool cycle = true,
-                        bool pace_by_src_fps = false,
-                        bool enable_vsync = false,
-                        bool disable_overlay = true,
-                        bool fullscreen = false,
-                        bool render_to_screen = true,
-                        bool publish_frame_meta = false,
-                        std::string sdl_video_driver = "",
-                        std::string sdl_render_driver = "");
+                        bool pace_by_src_fps = false);
 
     /**
      * @brief 析构并释放资源。

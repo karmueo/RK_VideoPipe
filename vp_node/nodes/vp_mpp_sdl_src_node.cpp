@@ -5,8 +5,6 @@
 #include <thread>
 #include <unistd.h>
 
-#include <opencv2/imgproc.hpp>
-
 #include "vp_utils/logger/vp_logger.h"
 #include "vp_utils/vp_utils.h"
 
@@ -53,34 +51,16 @@ vp_mpp_sdl_src_node::vp_mpp_sdl_src_node(std::string node_name,
                                          int channel_index,
                                          std::string file_path,
                                          bool cycle,
-                                         bool pace_by_src_fps,
-                                         bool enable_vsync,
-                                         bool disable_overlay,
-                                         bool fullscreen,
-                                         bool render_to_screen,
-                                         bool publish_frame_meta,
-                                         std::string sdl_video_driver,
-                                         std::string sdl_render_driver)
+                                         bool pace_by_src_fps)
     : vp_src_node(node_name, channel_index, 1.0f),
       file_path(std::move(file_path)),
       cycle(cycle),
-      pace_by_src_fps(pace_by_src_fps),
-      enable_vsync(enable_vsync),
-      disable_overlay(disable_overlay),
-      fullscreen(fullscreen),
-      render_to_screen(render_to_screen),
-      publish_frame_meta(publish_frame_meta),
-      sdl_video_driver(std::move(sdl_video_driver)),
-      sdl_render_driver(std::move(sdl_render_driver)) {
-    VP_INFO(vp_utils::string_format("[%s] file=%s cycle=%d pace=%d vsync=%d fullscreen=%d render=%d publish_meta=%d",
+      pace_by_src_fps(pace_by_src_fps) {
+    VP_INFO(vp_utils::string_format("[%s] file=%s cycle=%d pace=%d decode_only=1 nv12_output=1",
                                     this->node_name.c_str(),
                                     this->file_path.c_str(),
                                     this->cycle ? 1 : 0,
-                                    this->pace_by_src_fps ? 1 : 0,
-                                    this->enable_vsync ? 1 : 0,
-                                    this->fullscreen ? 1 : 0,
-                                    this->render_to_screen ? 1 : 0,
-                                    this->publish_frame_meta ? 1 : 0));
+                                    this->pace_by_src_fps ? 1 : 0));
     this->initialized();
 }
 
@@ -238,133 +218,6 @@ bool vp_mpp_sdl_src_node::init_decoder() {
     return true;
 }
 
-bool vp_mpp_sdl_src_node::init_sdl_for_frame(MppFrame frame) {
-    width = static_cast<int>(mpp_frame_get_width(frame));
-    height = static_cast<int>(mpp_frame_get_height(frame));
-    stride_h = static_cast<int>(mpp_frame_get_hor_stride(frame));
-    stride_v = static_cast<int>(mpp_frame_get_ver_stride(frame));
-
-    if (!sdl_video_driver.empty()) {
-        // 设置 SDL 视频驱动返回值。
-        const int set_env_ret = setenv("SDL_VIDEODRIVER", sdl_video_driver.c_str(), 1);
-        if (set_env_ret != 0) {
-            VP_WARN(vp_utils::string_format("[%s] set SDL_VIDEODRIVER failed", node_name.c_str()));
-        }
-    }
-    if (!sdl_render_driver.empty()) {
-        // 对齐 mpp 示例：通过环境变量指定渲染驱动。
-        const int set_hint_env_ret = setenv("SDL_HINT_RENDER_DRIVER", sdl_render_driver.c_str(), 1);
-        if (set_hint_env_ret != 0) {
-            VP_WARN(vp_utils::string_format("[%s] set SDL_HINT_RENDER_DRIVER failed", node_name.c_str()));
-        }
-    }
-
-    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");
-    SDL_SetHint(SDL_HINT_RENDER_BATCHING, "1");
-    SDL_SetHint(SDL_HINT_RENDER_VSYNC, enable_vsync ? "1" : "0");
-#ifdef SDL_HINT_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR
-    SDL_SetHint(SDL_HINT_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR, "1");
-#endif
-#ifdef SDL_HINT_VIDEO_X11_FORCE_EGL
-    SDL_SetHint(SDL_HINT_VIDEO_X11_FORCE_EGL, "1");
-#endif
-
-    if (SDL_Init(SDL_INIT_VIDEO) != 0) {
-        VP_ERROR(vp_utils::string_format("[%s] SDL_Init failed: %s", node_name.c_str(), SDL_GetError()));
-        return false;
-    }
-
-    // 窗口标志。
-    Uint32 window_flags = SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE;
-    if (fullscreen) {
-        window_flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
-    }
-    sdl_window = SDL_CreateWindow(
-        "RK_VideoPipe MPP SDL Player",
-        SDL_WINDOWPOS_CENTERED,
-        SDL_WINDOWPOS_CENTERED,
-        width,
-        height,
-        window_flags);
-    if (!sdl_window) {
-        VP_ERROR(vp_utils::string_format("[%s] SDL_CreateWindow failed: %s", node_name.c_str(), SDL_GetError()));
-        return false;
-    }
-
-    // 渲染器标志。
-    Uint32 renderer_flags = SDL_RENDERER_ACCELERATED;
-    if (enable_vsync) {
-        renderer_flags |= SDL_RENDERER_PRESENTVSYNC;
-    }
-    // 指定渲染器索引，默认自动。
-    int render_index = -1;
-    if (!sdl_render_driver.empty()) {
-        const int driver_count = SDL_GetNumRenderDrivers();
-        for (int i = 0; i < driver_count; ++i) {
-            // 渲染器信息。
-            SDL_RendererInfo renderer_info;
-            if (SDL_GetRenderDriverInfo(i, &renderer_info) == 0 &&
-                renderer_info.name != nullptr &&
-                !strcmp(renderer_info.name, sdl_render_driver.c_str())) {
-                render_index = i;
-                break;
-            }
-        }
-        if (render_index < 0) {
-            VP_WARN(vp_utils::string_format("[%s] render driver %s not found, fallback auto",
-                                            node_name.c_str(), sdl_render_driver.c_str()));
-        }
-    }
-    sdl_renderer = SDL_CreateRenderer(sdl_window, render_index, renderer_flags);
-    if (!sdl_renderer) {
-        VP_WARN(vp_utils::string_format("[%s] SDL accelerated renderer failed: %s, fallback",
-                                        node_name.c_str(), SDL_GetError()));
-        sdl_renderer = SDL_CreateRenderer(sdl_window, -1, enable_vsync ? SDL_RENDERER_PRESENTVSYNC : 0);
-        if (!sdl_renderer) {
-            VP_ERROR(vp_utils::string_format("[%s] SDL_CreateRenderer failed: %s", node_name.c_str(), SDL_GetError()));
-            return false;
-        }
-    }
-
-    // 当前渲染器信息。
-    SDL_RendererInfo active_renderer_info;
-    if (SDL_GetRendererInfo(sdl_renderer, &active_renderer_info) == 0) {
-        VP_INFO(vp_utils::string_format("[%s] SDL video_driver=%s render_driver=%s flags=0x%x",
-                                        node_name.c_str(),
-                                        SDL_GetCurrentVideoDriver() ? SDL_GetCurrentVideoDriver() : "unknown",
-                                        active_renderer_info.name ? active_renderer_info.name : "unknown",
-                                        active_renderer_info.flags));
-    }
-
-    sdl_texture = SDL_CreateTexture(sdl_renderer,
-                                    SDL_PIXELFORMAT_NV12,
-                                    SDL_TEXTUREACCESS_STREAMING,
-                                    width,
-                                    height);
-    if (!sdl_texture) {
-        VP_ERROR(vp_utils::string_format("[%s] SDL_CreateTexture NV12 failed: %s", node_name.c_str(), SDL_GetError()));
-        return false;
-    }
-
-    sdl_inited = true;
-    VP_INFO(vp_utils::string_format("[%s] sdl ready w=%d h=%d stride=%d:%d",
-                                    node_name.c_str(), width, height, stride_h, stride_v));
-    return true;
-}
-
-void vp_mpp_sdl_src_node::pump_sdl_events() {
-    // SDL 事件对象。
-    SDL_Event event;
-    while (SDL_PollEvent(&event)) {
-        if (event.type == SDL_QUIT) {
-            quit = true;
-        }
-        if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE) {
-            quit = true;
-        }
-    }
-}
-
 void vp_mpp_sdl_src_node::log_runtime_fps() {
     if (fps_start_us == 0 || dec_frames == 0) {
         return;
@@ -400,69 +253,12 @@ void vp_mpp_sdl_src_node::log_runtime_fps() {
     fps_last_log_frames = dec_frames;
 }
 
-bool vp_mpp_sdl_src_node::render_frame_nv12(MppFrame frame) {
-    // MPP buffer。
-    MppBuffer buffer = mpp_frame_get_buffer(frame);
-    if (!buffer) {
-        VP_WARN(vp_utils::string_format("[%s] frame has no buffer", node_name.c_str()));
-        return false;
-    }
-
-    // NV12 基地址。
-    auto* base = static_cast<RK_U8*>(mpp_buffer_get_ptr(buffer));
-    if (!base) {
-        VP_WARN(vp_utils::string_format("[%s] mpp buffer ptr is null", node_name.c_str()));
-        return false;
-    }
-
-    // Y 平面指针。
-    const RK_U8* y_plane = base;
-    // UV 平面指针。
-    const RK_U8* uv_plane = base + static_cast<size_t>(stride_h) * static_cast<size_t>(stride_v);
-
-    // SDL lock 输出像素首地址。
-    void* pixels = nullptr;
-    // SDL 输出步长。
-    int pitch = 0;
-    if (SDL_LockTexture(sdl_texture, nullptr, &pixels, &pitch) != 0) {
-        VP_WARN(vp_utils::string_format("[%s] SDL_LockTexture failed: %s", node_name.c_str(), SDL_GetError()));
-        return false;
-    }
-
-    if (!pixels || pitch <= 0) {
-        SDL_UnlockTexture(sdl_texture);
-        return false;
-    }
-
-    // SDL Y 平面目的地址。
-    auto* dst_y = static_cast<uint8_t*>(pixels);
-    // SDL UV 平面目的地址。
-    auto* dst_uv = dst_y + static_cast<size_t>(pitch) * static_cast<size_t>(height);
-
-    for (int row = 0; row < height; ++row) {
-        memcpy(dst_y + static_cast<size_t>(row) * static_cast<size_t>(pitch),
-               y_plane + static_cast<size_t>(row) * static_cast<size_t>(stride_h),
-               static_cast<size_t>(width));
-    }
-
-    for (int row = 0; row < height / 2; ++row) {
-        memcpy(dst_uv + static_cast<size_t>(row) * static_cast<size_t>(pitch),
-               uv_plane + static_cast<size_t>(row) * static_cast<size_t>(stride_h),
-               static_cast<size_t>(width));
-    }
-
-    SDL_UnlockTexture(sdl_texture);
-
-    if (SDL_RenderCopy(sdl_renderer, sdl_texture, nullptr, nullptr) != 0) {
-        VP_WARN(vp_utils::string_format("[%s] SDL_RenderCopy failed: %s", node_name.c_str(), SDL_GetError()));
-        return false;
-    }
-
-    SDL_RenderPresent(sdl_renderer);
-    return true;
-}
-
 bool vp_mpp_sdl_src_node::setup_info_change(MppFrame frame) {
+    width = static_cast<int>(mpp_frame_get_width(frame));
+    height = static_cast<int>(mpp_frame_get_height(frame));
+    stride_h = static_cast<int>(mpp_frame_get_hor_stride(frame));
+    stride_v = static_cast<int>(mpp_frame_get_ver_stride(frame));
+
     if (!dec_frm_grp) {
         // 创建内部 buffer group 返回值。
         const MPP_RET group_ret = mpp_buffer_group_get_internal(&dec_frm_grp, MPP_BUFFER_TYPE_ION);
@@ -487,52 +283,10 @@ bool vp_mpp_sdl_src_node::setup_info_change(MppFrame frame) {
         return false;
     }
 
-    if (render_to_screen) {
-        if (!sdl_inited && !init_sdl_for_frame(frame)) {
-            return false;
-        }
-    }
-
     return true;
 }
 
-void vp_mpp_sdl_src_node::publish_frame_meta_if_needed(MppFrame frame) {
-    if (!publish_frame_meta) {
-        // 轻量心跳 meta：仅用于下游/FPS统计，不做 NV12->BGR 转换。
-        int frame_width = static_cast<int>(mpp_frame_get_width(frame));
-        int frame_height = static_cast<int>(mpp_frame_get_height(frame));
-        if (frame_width <= 0) {
-            frame_width = original_width;
-        }
-        if (frame_height <= 0) {
-            frame_height = original_height;
-        }
-        if (frame_width <= 0) {
-            frame_width = 1;
-        }
-        if (frame_height <= 0) {
-            frame_height = 1;
-        }
-
-        // 心跳帧（1x1），仅满足 frame_meta 非空约束。
-        cv::Mat heartbeat_frame(1, 1, CV_8UC3, cv::Scalar(0, 0, 0));
-        this->frame_index++;
-        auto out_meta = std::make_shared<vp_objects::vp_frame_meta>(
-            heartbeat_frame,
-            this->frame_index,
-            this->channel_index,
-            frame_width,
-            frame_height,
-            this->original_fps);
-
-        this->out_queue.push(out_meta);
-        if (this->meta_handled_hooker) {
-            meta_handled_hooker(node_name, out_queue.size(), out_meta);
-        }
-        this->out_queue_semaphore.signal();
-        return;
-    }
-
+void vp_mpp_sdl_src_node::publish_nv12_frame_meta(MppFrame frame) {
     // MPP buffer。
     MppBuffer buffer = mpp_frame_get_buffer(frame);
     if (!buffer) {
@@ -558,29 +312,35 @@ void vp_mpp_sdl_src_node::publish_frame_meta_if_needed(MppFrame frame) {
         return;
     }
 
-    // NV12 原始矩阵（含 stride 区域）。
-    cv::Mat nv12_mat(frame_stride_v * 3 / 2, frame_stride_h, CV_8UC1, base);
-    // BGR 全尺寸图像（宽度为 stride）。
-    cv::Mat bgr_full;
-    cv::cvtColor(nv12_mat, bgr_full, cv::COLOR_YUV2BGR_NV12);
-
-    if (bgr_full.cols < frame_width || bgr_full.rows < frame_height) {
+    // NV12 输出帧（按有效宽高组织，不带 stride padding）。
+    cv::Mat output_nv12(frame_height * 3 / 2, frame_width, CV_8UC1);
+    if (output_nv12.empty()) {
         return;
     }
+    // Y 平面指针。
+    const RK_U8* y_plane = base;
+    // UV 平面指针。
+    const RK_U8* uv_plane = base + static_cast<size_t>(frame_stride_h) * static_cast<size_t>(frame_stride_v);
+    // 目标 Y 平面指针。
+    RK_U8* dst_y = output_nv12.ptr<RK_U8>(0);
+    // 目标 UV 平面指针。
+    RK_U8* dst_uv = output_nv12.ptr<RK_U8>(frame_height);
 
-    // 裁剪有效显示区域。
-    cv::Mat bgr_roi = bgr_full(cv::Rect(0, 0, frame_width, frame_height));
-
-    // 输出帧（深拷贝，避免底层内存复用导致野指针）。
-    cv::Mat output_frame = bgr_roi.clone();
-    if (output_frame.empty()) {
-        return;
+    for (int row = 0; row < frame_height; ++row) {
+        memcpy(dst_y + static_cast<size_t>(row) * static_cast<size_t>(frame_width),
+               y_plane + static_cast<size_t>(row) * static_cast<size_t>(frame_stride_h),
+               static_cast<size_t>(frame_width));
+    }
+    for (int row = 0; row < frame_height / 2; ++row) {
+        memcpy(dst_uv + static_cast<size_t>(row) * static_cast<size_t>(frame_width),
+               uv_plane + static_cast<size_t>(row) * static_cast<size_t>(frame_stride_h),
+               static_cast<size_t>(frame_width));
     }
 
     this->frame_index++;
     // 下游输出 meta。
     auto out_meta = std::make_shared<vp_objects::vp_frame_meta>(
-        output_frame,
+        output_nv12,
         this->frame_index,
         this->channel_index,
         frame_width,
@@ -625,13 +385,8 @@ bool vp_mpp_sdl_src_node::process_decoded_frame(MppFrame frame, bool& got_eos) {
 
         dec_frames++;
         log_runtime_fps();
-
-        if (render_to_screen && sdl_inited && !render_frame_nv12(frame)) {
-            return false;
-        }
         shown_frames++;
-
-        publish_frame_meta_if_needed(frame);
+        publish_nv12_frame_meta(frame);
     }
 
     if (mpp_frame_get_eos(frame)) {
@@ -644,7 +399,7 @@ bool vp_mpp_sdl_src_node::process_decoded_frame(MppFrame frame, bool& got_eos) {
 bool vp_mpp_sdl_src_node::poll_decoder_frames(bool& got_eos) {
     // 超时重试计数。
     int timeout_retry = 20;
-    while (alive && !quit) {
+    while (alive) {
         // 取出的解码帧。
         MppFrame frame = nullptr;
         // MPP 返回值。
@@ -668,7 +423,6 @@ bool vp_mpp_sdl_src_node::poll_decoder_frames(bool& got_eos) {
         // 当前帧处理结果。
         const bool ok = process_decoded_frame(frame, got_eos);
         mpp_frame_deinit(&frame);
-        pump_sdl_events();
         if (!ok) {
             return false;
         }
@@ -680,7 +434,7 @@ bool vp_mpp_sdl_src_node::poll_decoder_frames(bool& got_eos) {
 bool vp_mpp_sdl_src_node::put_dec_packet_retry(bool& got_eos) {
     // 提交重试次数。
     int retry = 2000;
-    while (retry-- > 0 && alive && !quit) {
+    while (retry-- > 0 && alive) {
         // 提交 packet 返回值。
         const MPP_RET ret = dec_mpi->decode_put_packet(dec_ctx, dec_pkt);
         if (ret == MPP_OK) {
@@ -693,7 +447,7 @@ bool vp_mpp_sdl_src_node::put_dec_packet_retry(bool& got_eos) {
     }
 
     // 主动退出时不视为错误，避免 Ctrl+C 产生误导性 timeout 日志。
-    if (!alive || quit) {
+    if (!alive) {
         return false;
     }
     VP_ERROR(vp_utils::string_format("[%s] decode_put_packet timeout", node_name.c_str()));
@@ -721,7 +475,7 @@ bool vp_mpp_sdl_src_node::send_to_decoder(const AVPacket* packet, bool eos, bool
         return put_dec_packet_retry(got_eos);
     }
 
-    while (offset < total_size && alive && !quit) {
+    while (offset < total_size && alive) {
         // 本次提交分片长度。
         size_t chunk = total_size - offset;
         if (chunk > k_input_chunk_size) {
@@ -738,7 +492,7 @@ bool vp_mpp_sdl_src_node::send_to_decoder(const AVPacket* packet, bool eos, bool
             mpp_packet_clr_eos(dec_pkt);
         }
 
-        while (mpp_packet_get_length(dec_pkt) > 0 && alive && !quit) {
+        while (mpp_packet_get_length(dec_pkt) > 0 && alive) {
             if (!put_dec_packet_retry(got_eos)) {
                 return false;
             }
@@ -769,7 +523,7 @@ bool vp_mpp_sdl_src_node::run_pipeline_once() {
         return false;
     }
 
-    while (alive && !quit && av_read_frame(ifmt, input_packet) >= 0) {
+    while (alive && av_read_frame(ifmt, input_packet) >= 0) {
         if (input_packet->stream_index == video_index) {
             // bsf 输入返回值。
             int ret = av_bsf_send_packet(ibsfc, input_packet);
@@ -784,7 +538,7 @@ bool vp_mpp_sdl_src_node::run_pipeline_once() {
 
             // bsf 输出返回值（初始化为 EAGAIN，避免短路时误判）。
             int receive_ret = AVERROR(EAGAIN);
-            while (alive && !quit && (receive_ret = av_bsf_receive_packet(ibsfc, filtered_packet)) >= 0) {
+            while (alive && (receive_ret = av_bsf_receive_packet(ibsfc, filtered_packet)) >= 0) {
                 if (!send_to_decoder(filtered_packet, false, got_eos)) {
                     av_packet_unref(filtered_packet);
                     av_packet_unref(input_packet);
@@ -802,7 +556,7 @@ bool vp_mpp_sdl_src_node::run_pipeline_once() {
                 av_packet_unref(filtered_packet);
             }
 
-            if (alive && !quit && receive_ret != AVERROR(EAGAIN) && receive_ret != AVERROR_EOF) {
+            if (alive && receive_ret != AVERROR(EAGAIN) && receive_ret != AVERROR_EOF) {
                 VP_ERROR(vp_utils::string_format("[%s] av_bsf_receive_packet failed: %s",
                                                  node_name.c_str(), ff_err_to_string(receive_ret).c_str()));
                 av_packet_unref(input_packet);
@@ -813,17 +567,16 @@ bool vp_mpp_sdl_src_node::run_pipeline_once() {
         }
 
         av_packet_unref(input_packet);
-        pump_sdl_events();
     }
 
-    if (alive && !quit) {
+    if (alive) {
         if (av_bsf_send_packet(ibsfc, nullptr) < 0) {
             av_packet_free(&input_packet);
             av_packet_free(&filtered_packet);
             return false;
         }
 
-        while (alive && !quit) {
+        while (alive) {
             // bsf 输出返回值。
             const int ret = av_bsf_receive_packet(ibsfc, filtered_packet);
             if (ret == AVERROR_EOF || ret == AVERROR(EAGAIN)) {
@@ -852,14 +605,13 @@ bool vp_mpp_sdl_src_node::run_pipeline_once() {
             return false;
         }
 
-        for (int i = 0; i < 3000 && !got_eos && alive && !quit; ++i) {
+        for (int i = 0; i < 3000 && !got_eos && alive; ++i) {
             if (!poll_decoder_frames(got_eos)) {
                 av_packet_free(&input_packet);
                 av_packet_free(&filtered_packet);
                 return false;
             }
             usleep(1000);
-            pump_sdl_events();
         }
     }
 
@@ -869,23 +621,6 @@ bool vp_mpp_sdl_src_node::run_pipeline_once() {
 }
 
 void vp_mpp_sdl_src_node::cleanup() {
-    if (sdl_texture) {
-        SDL_DestroyTexture(sdl_texture);
-        sdl_texture = nullptr;
-    }
-    if (sdl_renderer) {
-        SDL_DestroyRenderer(sdl_renderer);
-        sdl_renderer = nullptr;
-    }
-    if (sdl_window) {
-        SDL_DestroyWindow(sdl_window);
-        sdl_window = nullptr;
-    }
-    if (sdl_inited) {
-        SDL_Quit();
-        sdl_inited = false;
-    }
-
     if (dec_frm_grp) {
         mpp_buffer_group_put(dec_frm_grp);
         dec_frm_grp = nullptr;
@@ -922,7 +657,6 @@ void vp_mpp_sdl_src_node::handle_run() {
             break;
         }
 
-        quit = false;
         dec_frames = 0;
         shown_frames = 0;
         fps_start_us = 0;
@@ -948,7 +682,7 @@ void vp_mpp_sdl_src_node::handle_run() {
 
         cleanup();
 
-        if (!alive || quit) {
+        if (!alive) {
             break;
         }
         if (!cycle) {
