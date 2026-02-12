@@ -1,28 +1,30 @@
 /*
- * RK_VideoPipe 主程序（MPP 解码 + YOLO26 推理 + OSD 显示）
+ * RK_VideoPipe 主程序（MPP 硬解码 + YOLO26 推理 + OSD 显示 + NV12 SDL 预览）
  */
 
+#include <atomic>
 #include <chrono>
 #include <csignal>
-#include <atomic>
 #include <iostream>
-#include <termios.h>
 #include <string>
+#include <sys/select.h>
+#include <termios.h>
 #include <thread>
 #include <unistd.h>
-#include <sys/select.h>
 
 #include "nodes/infer/vp_rk_first_yolo26.h"
 #include "nodes/osd/vp_osd_node.h"
+#include "nodes/vp_bgr_to_nv12_node.h"
 #include "nodes/vp_mpp_sdl_src_node.h"
-#include "nodes/vp_screen_des_node.h"
+#include "nodes/vp_nv12_sdl_des_node.h"
+#include "nodes/vp_nv12_to_bgr_node.h"
 #include "vp_utils/analysis_board/vp_analysis_board.h"
 
 // 进程退出标志。
 static std::atomic<bool> g_should_exit{false};
 
 /**
- * @brief 终端原始模式守卫（用于捕获 ESC 无需回车）。
+ * @brief 终端原始模式守卫（用于捕获 ESC，无需回车）。
  */
 class TerminalRawModeGuard {
 public:
@@ -30,7 +32,7 @@ public:
      * @brief 构造并尝试切换终端到非规范模式。
      */
     TerminalRawModeGuard() {
-        // 记录标准输入是否为 TTY。
+        // 标准输入是否为 TTY。
         const bool is_tty = (isatty(STDIN_FILENO) == 1);
         if (!is_tty) {
             return;
@@ -73,7 +75,9 @@ private:
 
 /**
  * @brief 非阻塞检测终端是否按下 ESC。
- * @return true 按下 ESC；false 未按下。
+ *
+ * @return true 检测到 ESC。
+ * @return false 未检测到 ESC。
  */
 static bool check_terminal_escape_pressed() {
     // 读集合。
@@ -153,6 +157,15 @@ static void parse_args(int argc,
     }
 }
 
+/**
+ * @brief 主程序入口，构建线性视频管线。
+ *
+ * `src -> nv12_to_bgr -> yolo26 -> osd -> bgr_to_nv12 -> nv12_sdl_des`。
+ *
+ * @param argc 参数个数。
+ * @param argv 参数数组。
+ * @return int 进程退出码。
+ */
 int main(int argc, char** argv) {
     // 注册退出信号处理，支持 Ctrl+C 优雅退出。
     std::signal(SIGINT, handle_exit_signal);
@@ -162,10 +175,11 @@ int main(int argc, char** argv) {
     VP_SET_LOG_INCLUDE_THREAD_ID(false);
     VP_SET_LOG_LEVEL(vp_utils::INFO);
     VP_LOGGER_INIT();
+
     // 终端 ESC 监听守卫（自动恢复终端配置）。
     TerminalRawModeGuard terminal_raw_mode_guard;
-    // 重置屏幕窗口退出请求标志。
-    vp_nodes::vp_screen_des_reset_exit_flag();
+    // 重置 NV12 SDL 窗口退出请求标志。
+    vp_nodes::vp_nv12_sdl_des_reset_exit_flag();
 
     // 默认输入视频路径。
     std::string file_path = "/mnt/nfs/datasets/video/uav.mp4";
@@ -175,7 +189,7 @@ int main(int argc, char** argv) {
     std::string sdl_render_driver = "";
     // YOLO26 配置路径。
     std::string yolo26_config_path = "assets/configs/yolo26.json";
-    // 屏幕显示 sink。
+    // 屏幕显示 sink（保留参数兼容，当前流程未使用该参数）。
     std::string screen_sink = "autovideosink";
     parse_args(argc, argv, file_path, sdl_video_driver, sdl_render_driver, yolo26_config_path, screen_sink);
 
@@ -186,31 +200,37 @@ int main(int argc, char** argv) {
                                     yolo26_config_path.c_str(),
                                     screen_sink.c_str()));
 
-    // MPP 源节点（开启 frame_meta 发布给推理节点，关闭源直渲染）。
+    // MPP 文件源节点（纯硬解码并向下游下发 NV12 数据）。
     auto src_0 = std::make_shared<vp_nodes::vp_mpp_sdl_src_node>(
-        "file_src_0",
-        0,
-        file_path,
-        true,               // 循环播放。
-        false,              // 不按源 FPS 节奏限速。
-        false,              // 关闭 vsync。
-        true,               // 关闭 overlay。
-        false,              // 不启用全屏，保持与 mp4_hw_dec_sdl2 默认一致。
-        false,              // 关闭源节点直渲染，统一由 screen_des 显示。
-        true,               // 发布 frame_meta 给后续推理/OSD。
-        sdl_video_driver,   // SDL 视频驱动。
-        sdl_render_driver   // SDL 渲染驱动。
+        "file_src_0",     // node_name：源节点名称。
+        0,                // channel_index：通道索引。
+        file_path,        // file_path：输入视频路径。
+        true,             // cycle：是否循环播放。
+        false             // pace_by_src_fps：是否按源帧率限速。
     );
 
+    // NV12 转 BGR 适配节点（供推理/OSD/stream 链路使用）。
+    auto nv12_to_bgr_0 = std::make_shared<vp_nodes::vp_nv12_to_bgr_node>("nv12_to_bgr_0");
     // YOLO26 检测节点。
     auto yolo26_0 = std::make_shared<vp_nodes::vp_rk_first_yolo26>("yolo26_0", yolo26_config_path);
-    // OSD 节点。
+    // OSD 绘制节点。
     auto osd_0 = std::make_shared<vp_nodes::vp_osd_node>("osd_0");
-    // 屏幕显示节点。
-    auto screen_des_0 = std::make_shared<vp_nodes::vp_screen_des_node>("screen_des_0", 0, true, vp_objects::vp_size(), false, screen_sink);
-    yolo26_0->attach_to({src_0});
+    // BGR 转 NV12 适配节点（把 OSD 结果转为 NV12 供 SDL 显示）。
+    auto bgr_to_nv12_0 = std::make_shared<vp_nodes::vp_bgr_to_nv12_node>("bgr_to_nv12_0");
+    // NV12 SDL 直显终端节点（显示解码原始画面）。
+    auto nv12_des_0 = std::make_shared<vp_nodes::vp_nv12_sdl_des_node>(
+        "nv12_des_0",      // node_name：终端节点名称。
+        0,                  // channel_index：通道索引。
+        sdl_video_driver,   // sdl_video_driver：SDL 视频驱动。
+        sdl_render_driver   // sdl_render_driver：SDL 渲染驱动。
+    );
+
+    // 业务主链路（保持检测/OSD处理结构，输出改为 SDL NV12 显示）。
+    nv12_to_bgr_0->attach_to({src_0});
+    yolo26_0->attach_to({nv12_to_bgr_0});
     osd_0->attach_to({yolo26_0});
-    screen_des_0->attach_to({osd_0});
+    bgr_to_nv12_0->attach_to({osd_0});
+    nv12_des_0->attach_to({bgr_to_nv12_0});
 
     src_0->start();
 
@@ -219,8 +239,8 @@ int main(int argc, char** argv) {
     board.display(1, false);
 
     while (!g_should_exit.load()) {
-        if (vp_nodes::vp_screen_des_should_exit()) {
-            VP_INFO("[main] window exit requested, exiting...");
+        if (vp_nodes::vp_nv12_sdl_des_should_exit()) {
+            VP_INFO("[main] nv12 sdl exit requested, exiting...");
             g_should_exit.store(true);
             break;
         }

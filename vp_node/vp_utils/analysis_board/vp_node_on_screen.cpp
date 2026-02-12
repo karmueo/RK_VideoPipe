@@ -277,7 +277,7 @@ namespace vp_utils {
             vp_utils::put_text_at_center_of_rect(canvas, stream_status_hooker_storage.direction,
                                                 cv::Rect(node_left + node_rect.width / 2 - 10, node_top + node_title_h * 5 / 3 + node_queue_port_padding * 2, node_rect.width * 4 / 3 + 10, node_title_h * 2 / 3),
                                                 true,font_face,1,cv::Scalar(),cv::Scalar(),cv::Scalar(255, 255, 255));    
-            vp_utils::put_text_at_center_of_rect(canvas, "encode_fps: " + vp_utils::round_any(stream_status_hooker_storage.fps, 2),
+            vp_utils::put_text_at_center_of_rect(canvas, "output_fps: " + vp_utils::round_any(stream_status_hooker_storage.fps, 2),
                                                 cv::Rect(node_left + node_rect.width / 2 - 10, node_top + node_title_h * 7 / 3 + node_queue_port_padding * 3, node_rect.width * 4 / 3 + 10, node_title_h * 2 / 3),
                                                 true,font_face,1,cv::Scalar(),cv::Scalar(),cv::Scalar(255, 255, 255));   
             vp_utils::put_text_at_center_of_rect(canvas, "latency: " + std::to_string(stream_status_hooker_storage.latency) + "ms",
