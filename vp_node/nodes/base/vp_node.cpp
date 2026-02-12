@@ -4,10 +4,22 @@
 namespace vp_nodes {
     
     vp_node::vp_node(std::string node_name): node_name(node_name) {
+        node_fps_last_time = std::chrono::system_clock::now();
     }
     
     vp_node::~vp_node() {
 
+    }
+
+    void vp_node::log_node_fps_if_needed(const char* stage) {
+        node_fps_counter++;
+        auto delta_time = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now() - node_fps_last_time);
+        if (delta_time.count() >= node_fps_epoch_ms) {
+            const double fps = delta_time.count() > 0 ? node_fps_counter * 1000.0 / delta_time.count() : 0.0;
+            VP_INFO(vp_utils::string_format("[%s] [%s] process_fps=%.2f", node_name.c_str(), stage, fps));
+            node_fps_counter = 0;
+            node_fps_last_time = std::chrono::system_clock::now();
+        }
     }
 
     // there is only one thread poping data from the in_queue, we don't use lock here when poping.
@@ -63,6 +75,9 @@ namespace vp_nodes {
             }
             this->in_queue.pop();
             VP_DEBUG(vp_utils::string_format("[%s] after handling meta, in_queue.size()==>%d", node_name.c_str(), in_queue.size()));
+            if (in_meta->meta_type == vp_objects::vp_meta_type::FRAME) {
+                log_node_fps_if_needed("handle");
+            }
 
             // one by one mode
             // return nullptr means do not push it to next nodes(such as in des nodes).
@@ -121,6 +136,9 @@ namespace vp_nodes {
             this->push_meta(out_meta);
             this->out_queue.pop();
             VP_DEBUG(vp_utils::string_format("[%s] after dispatching meta, out_queue.size()==>%d", node_name.c_str(), out_queue.size()));
+            if (node_type() == vp_node_type::SRC && out_meta->meta_type == vp_objects::vp_meta_type::FRAME) {
+                log_node_fps_if_needed("dispatch");
+            }
         }
     }
 

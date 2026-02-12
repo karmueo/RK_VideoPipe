@@ -1,20 +1,105 @@
 /*
- * RK_VideoPipe 主程序（MPP 解码直达 SDL 显示）
+ * RK_VideoPipe 主程序（MPP 解码 + YOLO26 推理 + OSD 显示）
  */
 
 #include <chrono>
 #include <csignal>
 #include <atomic>
 #include <iostream>
+#include <termios.h>
 #include <string>
 #include <thread>
+#include <unistd.h>
+#include <sys/select.h>
 
-#include "nodes/vp_fake_des_node.h"
+#include "nodes/infer/vp_rk_first_yolo26.h"
+#include "nodes/osd/vp_osd_node.h"
 #include "nodes/vp_mpp_sdl_src_node.h"
+#include "nodes/vp_screen_des_node.h"
 #include "vp_utils/analysis_board/vp_analysis_board.h"
 
 // 进程退出标志。
 static std::atomic<bool> g_should_exit{false};
+
+/**
+ * @brief 终端原始模式守卫（用于捕获 ESC 无需回车）。
+ */
+class TerminalRawModeGuard {
+public:
+    /**
+     * @brief 构造并尝试切换终端到非规范模式。
+     */
+    TerminalRawModeGuard() {
+        // 记录标准输入是否为 TTY。
+        const bool is_tty = (isatty(STDIN_FILENO) == 1);
+        if (!is_tty) {
+            return;
+        }
+
+        // 旧终端配置读取结果。
+        const int get_ret = tcgetattr(STDIN_FILENO, &old_termios_);
+        if (get_ret != 0) {
+            return;
+        }
+
+        // 新终端配置（基于旧配置拷贝）。
+        struct termios new_termios = old_termios_;
+        new_termios.c_lflag &= static_cast<unsigned int>(~(ICANON | ECHO));
+        new_termios.c_cc[VMIN] = 0;
+        new_termios.c_cc[VTIME] = 0;
+
+        // 切换终端配置结果。
+        const int set_ret = tcsetattr(STDIN_FILENO, TCSANOW, &new_termios);
+        if (set_ret == 0) {
+            enabled_ = true;
+        }
+    }
+
+    /**
+     * @brief 析构时恢复终端配置。
+     */
+    ~TerminalRawModeGuard() {
+        if (enabled_) {
+            tcsetattr(STDIN_FILENO, TCSANOW, &old_termios_);
+        }
+    }
+
+private:
+    // 原终端配置。
+    struct termios old_termios_ {};
+    // 是否已成功启用原始模式。
+    bool enabled_ = false;
+};
+
+/**
+ * @brief 非阻塞检测终端是否按下 ESC。
+ * @return true 按下 ESC；false 未按下。
+ */
+static bool check_terminal_escape_pressed() {
+    // 读集合。
+    fd_set read_fds;
+    FD_ZERO(&read_fds);
+    FD_SET(STDIN_FILENO, &read_fds);
+
+    // 超时配置（立即返回）。
+    struct timeval timeout {};
+    timeout.tv_sec = 0;
+    timeout.tv_usec = 0;
+
+    // select 结果。
+    const int ready = select(STDIN_FILENO + 1, &read_fds, nullptr, nullptr, &timeout);
+    if (ready <= 0 || !FD_ISSET(STDIN_FILENO, &read_fds)) {
+        return false;
+    }
+
+    // 读取到的字符。
+    unsigned char ch = 0;
+    const ssize_t read_size = read(STDIN_FILENO, &ch, 1);
+    if (read_size == 1 && ch == 27U) {
+        return true;
+    }
+    return false;
+}
 
 /**
  * @brief 处理退出信号，仅设置退出标志位。
@@ -33,20 +118,24 @@ static void handle_exit_signal(int signal_number) {
  * 1) argv[1]: 输入视频路径（可选）
  * 2) argv[2]: SDL 视频驱动（可选，如 x11/wayland/kmsdrm）
  * 3) argv[3]: SDL 渲染驱动（可选，如 opengl/opengles2）
+ * 4) argv[4]: YOLO26 配置路径（可选）
+ * 5) argv[5]: 屏幕 sink（可选，如 ximagesink/waylandsink/kmssink）
  *
  * @param argc 参数个数。
  * @param argv 参数数组。
  * @param file_path 输出视频路径。
  * @param sdl_video_driver 输出 SDL 视频驱动。
  * @param sdl_render_driver 输出 SDL 渲染驱动。
- * @param render_to_screen 输出是否渲染到屏幕。
+ * @param yolo26_config_path 输出 YOLO26 配置路径。
+ * @param screen_sink 输出屏幕 sink 名称。
  */
 static void parse_args(int argc,
                        char** argv,
                        std::string& file_path,
                        std::string& sdl_video_driver,
                        std::string& sdl_render_driver,
-                       bool& render_to_screen) {
+                       std::string& yolo26_config_path,
+                       std::string& screen_sink) {
     if (argc > 1 && argv[1] != nullptr) {
         file_path = argv[1];
     }
@@ -57,12 +146,10 @@ static void parse_args(int argc,
         sdl_render_driver = argv[3];
     }
     if (argc > 4 && argv[4] != nullptr) {
-        const std::string render_arg = argv[4];
-        if (render_arg == "0" || render_arg == "false" || render_arg == "off") {
-            render_to_screen = false;
-        } else if (render_arg == "1" || render_arg == "true" || render_arg == "on") {
-            render_to_screen = true;
-        }
+        yolo26_config_path = argv[4];
+    }
+    if (argc > 5 && argv[5] != nullptr) {
+        screen_sink = argv[5];
     }
 }
 
@@ -75,6 +162,10 @@ int main(int argc, char** argv) {
     VP_SET_LOG_INCLUDE_THREAD_ID(false);
     VP_SET_LOG_LEVEL(vp_utils::INFO);
     VP_LOGGER_INIT();
+    // 终端 ESC 监听守卫（自动恢复终端配置）。
+    TerminalRawModeGuard terminal_raw_mode_guard;
+    // 重置屏幕窗口退出请求标志。
+    vp_nodes::vp_screen_des_reset_exit_flag();
 
     // 默认输入视频路径。
     std::string file_path = "/mnt/nfs/datasets/video/uav.mp4";
@@ -82,17 +173,20 @@ int main(int argc, char** argv) {
     std::string sdl_video_driver = "";
     // SDL 渲染驱动（默认自动选择）。
     std::string sdl_render_driver = "";
-    // 是否渲染到屏幕（默认开启，可通过第4参数关闭）。
-    bool render_to_screen = true;
-    parse_args(argc, argv, file_path, sdl_video_driver, sdl_render_driver, render_to_screen);
+    // YOLO26 配置路径。
+    std::string yolo26_config_path = "assets/configs/yolo26.json";
+    // 屏幕显示 sink。
+    std::string screen_sink = "autovideosink";
+    parse_args(argc, argv, file_path, sdl_video_driver, sdl_render_driver, yolo26_config_path, screen_sink);
 
-    VP_INFO(vp_utils::string_format("[main] file=%s sdl_video_driver=%s sdl_render_driver=%s render=%d",
+    VP_INFO(vp_utils::string_format("[main] file=%s sdl_video_driver=%s sdl_render_driver=%s yolo26_cfg=%s sink=%s",
                                     file_path.c_str(),
                                     sdl_video_driver.empty() ? "auto" : sdl_video_driver.c_str(),
                                     sdl_render_driver.empty() ? "auto" : sdl_render_driver.c_str(),
-                                    render_to_screen ? 1 : 0));
+                                    yolo26_config_path.c_str(),
+                                    screen_sink.c_str()));
 
-    // MPP+SDL 源节点（吞吐优先）。
+    // MPP 源节点（开启 frame_meta 发布给推理节点，关闭源直渲染）。
     auto src_0 = std::make_shared<vp_nodes::vp_mpp_sdl_src_node>(
         "file_src_0",
         0,
@@ -102,15 +196,21 @@ int main(int argc, char** argv) {
         false,              // 关闭 vsync。
         true,               // 关闭 overlay。
         false,              // 不启用全屏，保持与 mp4_hw_dec_sdl2 默认一致。
-        render_to_screen,   // 是否开启屏幕渲染。
-        false,              // 不发布 frame_meta，避免 NV12 转 BGR。
+        false,              // 关闭源节点直渲染，统一由 screen_des 显示。
+        true,               // 发布 frame_meta 给后续推理/OSD。
         sdl_video_driver,   // SDL 视频驱动。
         sdl_render_driver   // SDL 渲染驱动。
     );
 
-    // 占位目标节点（仅显示，不做下游编码）。
-    auto des_0 = std::make_shared<vp_nodes::vp_fake_des_node>("fake_des_0", 0);
-    des_0->attach_to({src_0});
+    // YOLO26 检测节点。
+    auto yolo26_0 = std::make_shared<vp_nodes::vp_rk_first_yolo26>("yolo26_0", yolo26_config_path);
+    // OSD 节点。
+    auto osd_0 = std::make_shared<vp_nodes::vp_osd_node>("osd_0");
+    // 屏幕显示节点。
+    auto screen_des_0 = std::make_shared<vp_nodes::vp_screen_des_node>("screen_des_0", 0, true, vp_objects::vp_size(), false, screen_sink);
+    yolo26_0->attach_to({src_0});
+    osd_0->attach_to({yolo26_0});
+    screen_des_0->attach_to({osd_0});
 
     src_0->start();
 
@@ -119,6 +219,16 @@ int main(int argc, char** argv) {
     board.display(1, false);
 
     while (!g_should_exit.load()) {
+        if (vp_nodes::vp_screen_des_should_exit()) {
+            VP_INFO("[main] window exit requested, exiting...");
+            g_should_exit.store(true);
+            break;
+        }
+        if (check_terminal_escape_pressed()) {
+            VP_INFO("[main] ESC detected from terminal, exiting...");
+            g_should_exit.store(true);
+            break;
+        }
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 

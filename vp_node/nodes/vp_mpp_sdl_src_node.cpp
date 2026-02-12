@@ -802,7 +802,7 @@ bool vp_mpp_sdl_src_node::run_pipeline_once() {
                 av_packet_unref(filtered_packet);
             }
 
-            if (!quit && receive_ret != AVERROR(EAGAIN) && receive_ret != AVERROR_EOF) {
+            if (alive && !quit && receive_ret != AVERROR(EAGAIN) && receive_ret != AVERROR_EOF) {
                 VP_ERROR(vp_utils::string_format("[%s] av_bsf_receive_packet failed: %s",
                                                  node_name.c_str(), ff_err_to_string(receive_ret).c_str()));
                 av_packet_unref(input_packet);
