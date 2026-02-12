@@ -61,8 +61,20 @@ target_link_libraries(rk_videopipe_simple
     vp_node
 )
 
+add_executable(rk_videopipe_gst
+    gst_main.cc
+)
+target_link_libraries(rk_videopipe_gst
+    ${COMMON_LIBS}
+    ${BASE_LIBS}
+    rknn_models
+    videocodec
+    vp_node
+)
+
 install(TARGETS  ${PROJECT_NAME} DESTINATION .)
 install(TARGETS rk_videopipe_simple DESTINATION .)
+install(TARGETS rk_videopipe_gst DESTINATION .)
 install(PROGRAMS ${BASE_LIBS} DESTINATION lib)
 install(PROGRAMS ${RKNN_RT_LIB} DESTINATION lib)
 install(PROGRAMS ${MPP_LIB} DESTINATION lib)

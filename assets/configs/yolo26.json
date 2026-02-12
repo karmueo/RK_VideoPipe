@@ -7,5 +7,5 @@
     "input_height": 352,
     "conf_threshold": 0.5,
     "nms_threshold": 0.45,
-    "infer_skip_frames": 2
+    "infer_skip_frames": 5
 }
