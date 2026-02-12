@@ -3,12 +3,28 @@
  */
 
 #include <chrono>
+#include <csignal>
+#include <atomic>
 #include <iostream>
 #include <string>
 #include <thread>
 
 #include "nodes/vp_fake_des_node.h"
 #include "nodes/vp_mpp_sdl_src_node.h"
+#include "vp_utils/analysis_board/vp_analysis_board.h"
+
+// 进程退出标志。
+static std::atomic<bool> g_should_exit{false};
+
+/**
+ * @brief 处理退出信号，仅设置退出标志位。
+ *
+ * @param signal_number 信号编号。
+ */
+static void handle_exit_signal(int signal_number) {
+    (void)signal_number;
+    g_should_exit.store(true);
+}
 
 /**
  * @brief 解析可选命令行参数。
@@ -51,6 +67,10 @@ static void parse_args(int argc,
 }
 
 int main(int argc, char** argv) {
+    // 注册退出信号处理，支持 Ctrl+C 优雅退出。
+    std::signal(SIGINT, handle_exit_signal);
+    std::signal(SIGTERM, handle_exit_signal);
+
     VP_SET_LOG_INCLUDE_CODE_LOCATION(false);
     VP_SET_LOG_INCLUDE_THREAD_ID(false);
     VP_SET_LOG_LEVEL(vp_utils::INFO);
@@ -62,7 +82,7 @@ int main(int argc, char** argv) {
     std::string sdl_video_driver = "";
     // SDL 渲染驱动（默认自动选择）。
     std::string sdl_render_driver = "";
-    // 是否渲染到屏幕（默认开启）。
+    // 是否渲染到屏幕（默认开启，可通过第4参数关闭）。
     bool render_to_screen = true;
     parse_args(argc, argv, file_path, sdl_video_driver, sdl_render_driver, render_to_screen);
 
@@ -83,20 +103,27 @@ int main(int argc, char** argv) {
         true,               // 关闭 overlay。
         false,              // 不启用全屏，保持与 mp4_hw_dec_sdl2 默认一致。
         render_to_screen,   // 是否开启屏幕渲染。
-        false,              // 不向下游发布 frame_meta。
+        false,              // 不发布 frame_meta，避免 NV12 转 BGR。
         sdl_video_driver,   // SDL 视频驱动。
         sdl_render_driver   // SDL 渲染驱动。
     );
 
-    // 占位目标节点（满足 pipeline 以 DES 结束）。
+    // 占位目标节点（仅显示，不做下游编码）。
     auto des_0 = std::make_shared<vp_nodes::vp_fake_des_node>("fake_des_0", 0);
     des_0->attach_to({src_0});
 
     src_0->start();
 
-    while (true) {
-        std::this_thread::sleep_for(std::chrono::seconds(1));
+    // 数据流分析看板（非阻塞窗口）。
+    vp_utils::vp_analysis_board board({src_0});
+    board.display(1, false);
+
+    while (!g_should_exit.load()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
+
+    // 退出前拆链，触发各节点线程有序停止。
+    src_0->detach_recursively();
 
     return 0;
 }

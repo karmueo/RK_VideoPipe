@@ -24,6 +24,43 @@ vp_fakesink_des_node::~vp_fakesink_des_node() {
     deinitialized();
 }
 
+void vp_fakesink_des_node::meta_flow(std::shared_ptr<vp_objects::vp_meta> meta) {
+    if (meta == nullptr) {
+        return;
+    }
+
+    std::lock_guard<std::mutex> guard(this->in_queue_lock);
+    const bool queue_full = this->in_queue.size() >= this->max_in_queue_size;
+    const bool is_frame_meta = meta->meta_type == vp_objects::vp_meta_type::FRAME;
+    if (queue_full && is_frame_meta) {
+        this->dropped_frames++;
+        // 每秒打印一次丢帧统计，避免日志刷屏。
+        const auto now_tp = std::chrono::steady_clock::now();
+        if (this->dropped_log_tp.time_since_epoch().count() == 0) {
+            this->dropped_log_tp = now_tp;
+            this->dropped_frames_last_log = this->dropped_frames;
+        } else {
+            const auto delta_ms =
+                std::chrono::duration_cast<std::chrono::milliseconds>(now_tp - this->dropped_log_tp).count();
+            if (delta_ms >= 1000) {
+                const uint64_t dropped_delta = this->dropped_frames - this->dropped_frames_last_log;
+                VP_WARN(vp_utils::string_format("[%s] drop_frame backlog=%zu dropped=%llu(+%llu/s)",
+                                                this->node_name.c_str(),
+                                                this->in_queue.size(),
+                                                static_cast<unsigned long long>(this->dropped_frames),
+                                                static_cast<unsigned long long>(dropped_delta)));
+                this->dropped_log_tp = now_tp;
+                this->dropped_frames_last_log = this->dropped_frames;
+            }
+        }
+        return;
+    }
+
+    this->in_queue.push(meta);
+    invoke_meta_arriving_hooker(this->node_name, this->in_queue.size(), meta);
+    this->in_queue_semaphore.signal();
+}
+
 std::shared_ptr<vp_objects::vp_meta>
 vp_fakesink_des_node::handle_frame_meta(std::shared_ptr<vp_objects::vp_frame_meta> meta) {
     // 待编码帧。

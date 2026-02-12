@@ -498,6 +498,38 @@ bool vp_mpp_sdl_src_node::setup_info_change(MppFrame frame) {
 
 void vp_mpp_sdl_src_node::publish_frame_meta_if_needed(MppFrame frame) {
     if (!publish_frame_meta) {
+        // 轻量心跳 meta：仅用于下游/FPS统计，不做 NV12->BGR 转换。
+        int frame_width = static_cast<int>(mpp_frame_get_width(frame));
+        int frame_height = static_cast<int>(mpp_frame_get_height(frame));
+        if (frame_width <= 0) {
+            frame_width = original_width;
+        }
+        if (frame_height <= 0) {
+            frame_height = original_height;
+        }
+        if (frame_width <= 0) {
+            frame_width = 1;
+        }
+        if (frame_height <= 0) {
+            frame_height = 1;
+        }
+
+        // 心跳帧（1x1），仅满足 frame_meta 非空约束。
+        cv::Mat heartbeat_frame(1, 1, CV_8UC3, cv::Scalar(0, 0, 0));
+        this->frame_index++;
+        auto out_meta = std::make_shared<vp_objects::vp_frame_meta>(
+            heartbeat_frame,
+            this->frame_index,
+            this->channel_index,
+            frame_width,
+            frame_height,
+            this->original_fps);
+
+        this->out_queue.push(out_meta);
+        if (this->meta_handled_hooker) {
+            meta_handled_hooker(node_name, out_queue.size(), out_meta);
+        }
+        this->out_queue_semaphore.signal();
         return;
     }
 
@@ -660,6 +692,10 @@ bool vp_mpp_sdl_src_node::put_dec_packet_retry(bool& got_eos) {
         usleep(1000);
     }
 
+    // 主动退出时不视为错误，避免 Ctrl+C 产生误导性 timeout 日志。
+    if (!alive || quit) {
+        return false;
+    }
     VP_ERROR(vp_utils::string_format("[%s] decode_put_packet timeout", node_name.c_str()));
     return false;
 }

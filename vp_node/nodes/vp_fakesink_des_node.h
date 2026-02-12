@@ -21,7 +21,12 @@ namespace vp_nodes {
 class vp_fakesink_des_node : public vp_des_node {
 private:
     // GStreamer 管线模板。
-    std::string gst_template = "appsrc ! videoconvert ! %s ! h264parse ! fakesink sync=false";
+    std::string gst_template =
+        "appsrc is-live=true do-timestamp=true block=false format=time ! "
+        "video/x-raw,format=BGR ! "
+        "queue leaky=downstream max-size-buffers=4 max-size-time=0 max-size-bytes=0 ! "
+        "%s rc-mode=fixqp qp-init=30 level=42 gop=50 ! "
+        "h264parse ! fakesink sync=false async=false";
     // 实际使用的 GStreamer 管线。
     std::string gst_pipeline;
     // OpenCV 输出器。
@@ -39,7 +44,26 @@ private:
     // 上次打印 FPS 时间。
     std::chrono::steady_clock::time_point fps_last_log_tp;
 
+    // 编码节点输入队列上限，超出后丢弃新帧，避免无界堆积拖垮全链路。
+    size_t max_in_queue_size = 8;
+    // 因队列保护丢弃的帧计数。
+    uint64_t dropped_frames = 0;
+    // 上次打印丢帧日志时的计数快照。
+    uint64_t dropped_frames_last_log = 0;
+    // 上次打印丢帧日志时间点。
+    std::chrono::steady_clock::time_point dropped_log_tp;
+
 protected:
+    /**
+     * @brief 接收上游元数据并在拥塞时执行丢帧保护。
+     *
+     * 当输入队列超过阈值时，丢弃新的帧元数据，避免队列无界增长导致吞吐持续下降。
+     * 控制元数据不丢弃。
+     *
+     * @param meta 上游传入的元数据。
+     */
+    virtual void meta_flow(std::shared_ptr<vp_objects::vp_meta> meta) override;
+
     /**
      * @brief 处理输入视频帧并推送到编码+fakesink 管线。
      * @param meta 输入帧元数据。
