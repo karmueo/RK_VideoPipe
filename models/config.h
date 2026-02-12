@@ -2,7 +2,7 @@
 #include <vector>
 #include <string>
 
-enum class ModelType{YOLOv5, YOLOv6, YOLOv7, YOLOv8, ResNet18, MobileNetv3, RTMPose};
+enum class ModelType{YOLOv5, YOLOv6, YOLOv7, YOLOv8, YOLO26, ResNet18, MobileNetv3, RTMPose};
 
 struct Config{
     std::string model_path;
@@ -15,6 +15,14 @@ struct YOLOConfig: public Config{
     ModelType type = ModelType::YOLOv5;
     float conf_threshold = 0.25;
     float nms_threshold = 0.45;
+};
+
+struct YOLO26Config: public Config{
+    ModelType type = ModelType::YOLO26;
+    float conf_threshold = 0.5;
+    float nms_threshold = 0.45;
+    int input_width = 640;
+    int input_height = 352;
 };
 
 struct ClsConfig: public Config{

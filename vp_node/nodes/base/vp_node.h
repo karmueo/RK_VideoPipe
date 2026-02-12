@@ -60,6 +60,20 @@ namespace vp_nodes {
         // synchronize for out_queue
         vp_utils::vp_semaphore out_queue_semaphore;
 
+        // 节点 FPS 统计周期（毫秒）。
+        int node_fps_epoch_ms = 1000;
+        // 周期内累计帧数。
+        int node_fps_counter = 0;
+        // 上次打印 FPS 的时间点。
+        std::chrono::system_clock::time_point node_fps_last_time;
+
+        /**
+         * @brief 记录并按周期打印节点处理 FPS。
+         *
+         * @param stage 统计阶段标识（如 handle/dispatch）。
+         */
+        void log_node_fps_if_needed(const char* stage);
+
         // get meta from in_queue, handle meta and put them into out_queue looply.
         // we need re-implement(define how to create meta and put it into out_queue) in src nodes since they have no previous nodes. 
         virtual void handle_run();
