@@ -69,6 +69,14 @@ namespace vp_nodes {
                     opencv_window_inited = true;
                     VP_INFO(vp_utils::string_format("[%s] open opencv window success.", node_name.c_str()));
                 }
+                // 窗口可见性状态（<1 表示窗口被关闭或不可见）。
+                const double window_visible = cv::getWindowProperty(node_name, cv::WND_PROP_VISIBLE);
+                if (window_visible < 1.0) {
+                    VP_INFO(vp_utils::string_format("[%s] opencv window closed, request exit.", node_name.c_str()));
+                    opencv_exit_requested = true;
+                    g_screen_des_exit_requested.store(true);
+                    return vp_des_node::handle_frame_meta(meta);
+                }
 
                 // OpenCV 显示限帧：超过阈值的帧直接跳过显示，避免显示端拖慢整条处理链路。
                 if (opencv_display_fps_limit > 0) {
