@@ -6,11 +6,20 @@ namespace vp_nodes {
     vp_screen_des_node::vp_screen_des_node(std::string node_name, 
                                             int channel_index, 
                                             bool osd,
-                                            vp_objects::vp_size display_w_h):
+                                            vp_objects::vp_size display_w_h,
+                                            bool fast_mode,
+                                            std::string video_sink):
                                             vp_des_node(node_name, channel_index),
                                             osd(osd),
-                                            display_w_h(display_w_h) {
-        this->gst_template = vp_utils::string_format(this->gst_template, node_name.c_str());
+                                            display_w_h(display_w_h),
+                                            fast_mode(fast_mode),
+                                            video_sink(video_sink) {
+        if (this->fast_mode) {
+            this->gst_template = vp_utils::string_format(this->gst_template_fast, this->video_sink.c_str());
+        }
+        else {
+            this->gst_template = vp_utils::string_format(this->gst_template_normal, node_name.c_str(), this->video_sink.c_str());
+        }
         VP_INFO(vp_utils::string_format("[%s] [%s]", node_name.c_str(), gst_template.c_str()));
         this->initialized();
     }

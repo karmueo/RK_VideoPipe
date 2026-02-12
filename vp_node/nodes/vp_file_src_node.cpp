@@ -12,10 +12,16 @@ namespace vp_nodes {
                                         float resize_ratio, 
                                         bool cycle,
                                         std::string gst_decoder_name,
-                                        int skip_interval): 
+                                        int skip_interval,
+                                        bool throttle_by_source_fps,
+                                        bool deep_copy_frame): 
                                         vp_src_node(node_name, channel_index, resize_ratio), 
                                         file_path(file_path), 
-                                        cycle(cycle), gst_decoder_name(gst_decoder_name), skip_interval(skip_interval) {
+                                        cycle(cycle),
+                                        gst_decoder_name(gst_decoder_name),
+                                        skip_interval(skip_interval),
+                                        throttle_by_source_fps(throttle_by_source_fps),
+                                        deep_copy_frame(deep_copy_frame) {
         assert(skip_interval >= 0 && skip_interval <= 9);
         this->gst_template = vp_utils::string_format(this->gst_template, file_path.c_str(), gst_decoder_name.c_str());
         VP_INFO(vp_utils::string_format("[%s] [%s]", node_name.c_str(), gst_template.c_str()));
@@ -54,6 +60,10 @@ namespace vp_nodes {
                 video_width = file_capture.get(cv::CAP_PROP_FRAME_WIDTH);
                 video_height = file_capture.get(cv::CAP_PROP_FRAME_HEIGHT);
                 fps = file_capture.get(cv::CAP_PROP_FPS);
+                // 兜底 FPS，避免 CAP_PROP_FPS 返回 0 导致除零。
+                if (fps <= 0) {
+                    fps = 25;
+                }
                 delta = std::chrono::milliseconds(1000 / fps) * (skip_interval + 1);
     
                 original_fps = fps;
@@ -90,7 +100,7 @@ namespace vp_nodes {
                 cv::resize(frame, resize_frame, cv::Size(), resize_ratio, resize_ratio);
             }
             else {
-                resize_frame = frame.clone();  // clone!
+                resize_frame = deep_copy_frame ? frame.clone() : frame;
             }
             // set true size because resize
             video_width = resize_frame.cols;
@@ -117,7 +127,7 @@ namespace vp_nodes {
             // for fps
             auto snap = std::chrono::system_clock::now() - last_time;
             snap = std::chrono::duration_cast<std::chrono::milliseconds>(snap);
-            if (snap < delta) {
+            if (throttle_by_source_fps && snap < delta) {
                 std::this_thread::sleep_for(delta - snap);
             }
         }

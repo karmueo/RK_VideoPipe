@@ -254,6 +254,8 @@ namespace vp_utils {
         auto node_top = node_rect.y;
         // stream info at src nodes
         if (original_node->node_type() == vp_nodes::vp_node_type::SRC) {
+            // 解码 FPS 文本（来自源节点输出端口的实时统计）。
+            std::string decode_fps_text = meta_leaving_hooker_storage.pre_fps.empty() ? "0" : meta_leaving_hooker_storage.pre_fps;
             vp_utils::put_text_at_center_of_rect(canvas, stream_info_hooker_storage.uri, 
                                                 cv::Rect(node_left - node_rect.width * 3 / 4, node_top + node_title_h + node_queue_port_padding, node_rect.width * 4 / 3, node_title_h * 2 / 3), 
                                                 true, font_face, 1, cv::Scalar(), cv::Scalar(), cv::Scalar(255, 255, 255));
@@ -266,13 +268,16 @@ namespace vp_utils {
             vp_utils::put_text_at_center_of_rect(canvas, "original_fps: " + std::to_string(stream_info_hooker_storage.original_fps),
                                                 cv::Rect(node_left - node_rect.width * 3 / 4, node_top + node_title_h * 9 / 3 + node_queue_port_padding * 4, node_rect.width * 4 / 3, node_title_h * 2 / 3),
                                                 true, font_face, 1, cv::Scalar(), cv::Scalar(), cv::Scalar(255, 255, 255));   
+            vp_utils::put_text_at_center_of_rect(canvas, "decode_fps: " + decode_fps_text,
+                                                cv::Rect(node_left - node_rect.width * 3 / 4, node_top + node_title_h * 11 / 3 + node_queue_port_padding * 5, node_rect.width * 4 / 3, node_title_h * 2 / 3),
+                                                true, font_face, 1, cv::Scalar(), cv::Scalar(), cv::Scalar(255, 255, 255));   
         } 
         // stream status at des nodes
         if (original_node->node_type() == vp_nodes::vp_node_type::DES) {
             vp_utils::put_text_at_center_of_rect(canvas, stream_status_hooker_storage.direction,
                                                 cv::Rect(node_left + node_rect.width / 2 - 10, node_top + node_title_h * 5 / 3 + node_queue_port_padding * 2, node_rect.width * 4 / 3 + 10, node_title_h * 2 / 3),
                                                 true,font_face,1,cv::Scalar(),cv::Scalar(),cv::Scalar(255, 255, 255));    
-            vp_utils::put_text_at_center_of_rect(canvas, "output_fps: " + vp_utils::round_any(stream_status_hooker_storage.fps, 2),
+            vp_utils::put_text_at_center_of_rect(canvas, "encode_fps: " + vp_utils::round_any(stream_status_hooker_storage.fps, 2),
                                                 cv::Rect(node_left + node_rect.width / 2 - 10, node_top + node_title_h * 7 / 3 + node_queue_port_padding * 3, node_rect.width * 4 / 3 + 10, node_title_h * 2 / 3),
                                                 true,font_face,1,cv::Scalar(),cv::Scalar(),cv::Scalar(255, 255, 255));   
             vp_utils::put_text_at_center_of_rect(canvas, "latency: " + std::to_string(stream_status_hooker_storage.latency) + "ms",
