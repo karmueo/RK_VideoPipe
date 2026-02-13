@@ -47,76 +47,121 @@ void vp_yolo26_preprocess_node::load_preprocess_config(const std::string& json_p
     }
 }
 
-bool vp_yolo26_preprocess_node::preprocess_with_rga(const cv::Mat& src_bgr, std::vector<uint8_t>& dst_rgb_data) const {
-    if (src_bgr.empty() || src_bgr.type() != CV_8UC3) {
+bool vp_yolo26_preprocess_node::ensure_rga_cache(int src_width, int src_height) {
+    if (src_width <= 1 || src_height <= 1 || input_width <= 1 || input_height <= 1) {
         return false;
     }
 
-    const int src_width = src_bgr.cols;  // 输入图像宽度。
-    const int src_height = src_bgr.rows;  // 输入图像高度。
-    const size_t src_bytes = static_cast<size_t>(src_width) * static_cast<size_t>(src_height) * 3U;  // 输入总字节数。
+    if (cache_src_width == src_width &&
+        cache_src_height == src_height &&
+        cache_dst_width == input_width &&
+        cache_dst_height == input_height &&
+        !cache_bgr_full_data.empty() &&
+        !cache_rgb_full_data.empty() &&
+        !cache_rgb_resize_data.empty()) {
+        return true;
+    }
+
+    const size_t src_rgb_bytes = static_cast<size_t>(src_width) * static_cast<size_t>(src_height) * 3U;  // 源尺寸 RGB/BGR 字节数。
+    const size_t dst_rgb_bytes = static_cast<size_t>(input_width) * static_cast<size_t>(input_height) * 3U;  // 目标尺寸 RGB 字节数。
+    cache_bgr_full_data.assign(src_rgb_bytes, 0U);
+    cache_rgb_full_data.assign(src_rgb_bytes, 0U);
+    cache_rgb_resize_data.assign(dst_rgb_bytes, 0U);
+    if (cache_bgr_full_data.empty() || cache_rgb_full_data.empty() || cache_rgb_resize_data.empty()) {
+        return false;
+    }
+
+    cache_src_width = src_width;
+    cache_src_height = src_height;
+    cache_dst_width = input_width;
+    cache_dst_height = input_height;
+    return true;
+}
+
+bool vp_yolo26_preprocess_node::preprocess_with_rga(const cv::Mat& src_nv12,
+                                                    std::vector<uint8_t>& dst_rgb_data,
+                                                    cv::Mat& dst_bgr_frame) {
+    if (src_nv12.empty() || src_nv12.type() != CV_8UC1) {
+        return false;
+    }
+
+    const int src_width = src_nv12.cols;  // 输入图像宽度。
+    const int src_rows = src_nv12.rows;  // 输入总行数（Y+UV）。
+    const int src_height = src_rows * 2 / 3;  // 输入图像高度。
+    if (src_height <= 1 || src_rows != src_height * 3 / 2 || src_width <= 1) {
+        return false;
+    }
+    const size_t src_nv12_bytes =
+        static_cast<size_t>(src_width) * static_cast<size_t>(src_height) * 3U / 2U;  // NV12 输入总字节数。
+    if (!ensure_rga_cache(src_width, src_height)) {
+        return false;
+    }
 
     std::vector<uint8_t> src_contiguous_data;  // 连续内存输入缓冲。
-    const uint8_t* src_ptr = src_bgr.data;  // 输入缓冲地址。
-    if (!src_bgr.isContinuous()) {
-        src_contiguous_data.resize(src_bytes);
-        for (int row = 0; row < src_height; ++row) {
-            const uint8_t* src_row_ptr = src_bgr.ptr<uint8_t>(row);  // 输入当前行起始地址。
-            uint8_t* dst_row_ptr = src_contiguous_data.data() + static_cast<size_t>(row) * static_cast<size_t>(src_width) * 3U;  // 连续缓冲当前行起始地址。
-            std::memcpy(dst_row_ptr, src_row_ptr, static_cast<size_t>(src_width) * 3U);
+    const uint8_t* src_ptr = src_nv12.data;  // 输入缓冲地址。
+    if (!src_nv12.isContinuous()) {
+        src_contiguous_data.resize(src_nv12_bytes);
+        for (int row = 0; row < src_rows; ++row) {
+            const uint8_t* src_row_ptr = src_nv12.ptr<uint8_t>(row);  // 输入当前行起始地址。
+            uint8_t* dst_row_ptr =
+                src_contiguous_data.data() + static_cast<size_t>(row) * static_cast<size_t>(src_width);  // 连续缓冲当前行起始地址。
+            std::memcpy(dst_row_ptr, src_row_ptr, static_cast<size_t>(src_width));
         }
         src_ptr = src_contiguous_data.data();
     }
 
-    std::vector<uint8_t> rgb_same_size_data(src_bytes);  // 与输入同尺寸的 RGB 中间缓冲。
-    const size_t dst_bytes = static_cast<size_t>(input_width) * static_cast<size_t>(input_height) * 3U;  // 输出总字节数。
-    dst_rgb_data.assign(dst_bytes, 0U);
-    if (rgb_same_size_data.empty() || dst_rgb_data.empty()) {
-        return false;
-    }
+    rga_buffer_t src_img = wrapbuffer_virtualaddr(const_cast<uint8_t*>(src_ptr),
+                                                  src_width,
+                                                  src_height,
+                                                  RK_FORMAT_YCbCr_420_SP);  // RGA 输入图描述。
+    rga_buffer_t bgr_img = wrapbuffer_virtualaddr(cache_bgr_full_data.data(),
+                                                  src_width,
+                                                  src_height,
+                                                  RK_FORMAT_BGR_888);  // RGA BGR 全尺寸图描述。
+    rga_buffer_t rgb_full_img = wrapbuffer_virtualaddr(cache_rgb_full_data.data(),
+                                                       src_width,
+                                                       src_height,
+                                                       RK_FORMAT_RGB_888);  // RGA RGB 全尺寸图描述。
+    rga_buffer_t rgb_resize_img = wrapbuffer_virtualaddr(cache_rgb_resize_data.data(),
+                                                         input_width,
+                                                         input_height,
+                                                         RK_FORMAT_RGB_888);  // RGA RGB 缩放图描述。
 
-    rga_buffer_handle_t src_handle = 0;  // RGA 输入句柄。
-    rga_buffer_handle_t rgb_handle = 0;  // RGA 中间图句柄。
-    rga_buffer_handle_t dst_handle = 0;  // RGA 输出句柄。
+    IM_STATUS bgr_status =
+        imcvtcolor(src_img, bgr_img, RK_FORMAT_YCbCr_420_SP, RK_FORMAT_BGR_888);  // NV12->BGR 状态。
+    bool success = (bgr_status == IM_STATUS_SUCCESS);
 
-    src_handle = importbuffer_virtualaddr(const_cast<uint8_t*>(src_ptr), src_bytes);
-    rgb_handle = importbuffer_virtualaddr(rgb_same_size_data.data(), src_bytes);
-    dst_handle = importbuffer_virtualaddr(dst_rgb_data.data(), dst_bytes);
-    if (src_handle == 0 || rgb_handle == 0 || dst_handle == 0) {
-        if (src_handle > 0) {
-            releasebuffer_handle(src_handle);
-        }
-        if (rgb_handle > 0) {
-            releasebuffer_handle(rgb_handle);
-        }
-        if (dst_handle > 0) {
-            releasebuffer_handle(dst_handle);
-        }
-        return false;
-    }
-
-    rga_buffer_t src_img =
-        wrapbuffer_handle(src_handle, src_width, src_height, RK_FORMAT_BGR_888);  // RGA 输入图描述。
-    rga_buffer_t rgb_img =
-        wrapbuffer_handle(rgb_handle, src_width, src_height, RK_FORMAT_RGB_888);  // RGA 中间图描述。
-    rga_buffer_t dst_img =
-        wrapbuffer_handle(dst_handle, input_width, input_height, RK_FORMAT_RGB_888);  // RGA 输出图描述。
-
-    IM_STATUS color_status =
-        imcvtcolor(src_img, rgb_img, RK_FORMAT_BGR_888, RK_FORMAT_RGB_888);  // RGA 颜色转换状态。
-    bool success = (color_status == IM_STATUS_SUCCESS);
+    // 融合路径：直接 NV12 -> RGB(目标尺寸)，把颜色转换与缩放合并为一步。
     if (success) {
-        IM_STATUS resize_status = imresize(rgb_img, dst_img);  // RGA 缩放状态。
-        success = (resize_status == IM_STATUS_SUCCESS);
+        IM_STATUS fused_status = improcess(src_img, rgb_resize_img, {}, {}, {}, {}, IM_SYNC);  // 融合处理状态。
+        success = (fused_status == IM_STATUS_SUCCESS);
     }
 
-    releasebuffer_handle(src_handle);
-    releasebuffer_handle(rgb_handle);
-    releasebuffer_handle(dst_handle);
+    // RGA 兼容性回退：若融合路径失败，则退回两步 RGA（NV12->RGB，再 RGB resize）。
+    if (success) {
+        // do nothing
+    } else {
+        IM_STATUS rgb_status =
+            imcvtcolor(src_img, rgb_full_img, RK_FORMAT_YCbCr_420_SP, RK_FORMAT_RGB_888);  // NV12->RGB 状态。
+        success = (rgb_status == IM_STATUS_SUCCESS);
+        if (success) {
+            IM_STATUS resize_status = imresize(rgb_full_img, rgb_resize_img);  // RGB 缩放状态。
+            success = (resize_status == IM_STATUS_SUCCESS);
+        }
+    }
+
+    if (success) {
+        dst_bgr_frame = cv::Mat(src_height, src_width, CV_8UC3, cache_bgr_full_data.data()).clone();
+        success = !dst_bgr_frame.empty();
+    }
     if (!success) {
         dst_rgb_data.clear();
+        dst_bgr_frame.release();
+        return false;
     }
-    return success;
+
+    dst_rgb_data = cache_rgb_resize_data;
+    return true;
 }
 
 std::shared_ptr<vp_objects::vp_meta> vp_yolo26_preprocess_node::handle_frame_meta(
@@ -126,12 +171,14 @@ std::shared_ptr<vp_objects::vp_meta> vp_yolo26_preprocess_node::handle_frame_met
     }
 
     std::vector<uint8_t> preprocessed_rgb_data;  // 预处理输出字节缓冲。
-    const bool ok = preprocess_with_rga(meta->frame, preprocessed_rgb_data);  // 预处理执行结果。
+    cv::Mat bgr_frame;  // 供后续 OSD 的 BGR 图像。
+    const bool ok = preprocess_with_rga(meta->frame, preprocessed_rgb_data, bgr_frame);  // 预处理执行结果。
     meta->yolo26_input_ready = ok;
     if (ok) {
         meta->yolo26_input_rgb_data = std::move(preprocessed_rgb_data);
         meta->yolo26_input_width = input_width;
         meta->yolo26_input_height = input_height;
+        meta->frame = bgr_frame;
     } else {
         meta->yolo26_input_rgb_data.clear();
         meta->yolo26_input_width = 0;

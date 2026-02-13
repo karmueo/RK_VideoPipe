@@ -89,8 +89,8 @@ void vp_rk_first_yolo26::run_infer_combinations(
         return;
     }
 
-    const int orig_w = mats_to_infer[0].cols;  // 原始 BGR 图像宽度。
-    const int orig_h = mats_to_infer[0].rows;  // 原始 BGR 图像高度。
+    const int orig_w = frame_meta->original_width > 0 ? frame_meta->original_width : mats_to_infer[0].cols;  // 原始图像宽度。
+    const int orig_h = frame_meta->original_height > 0 ? frame_meta->original_height : mats_to_infer[0].rows;  // 原始图像高度。
     std::vector<DetectionResult> res;  // 检测结果。
     rk_model->run(frame_meta->yolo26_input_rgb_data.data(), orig_w, orig_h, res);
     auto infer_time = std::chrono::duration_cast<std::chrono::milliseconds>(
