@@ -72,8 +72,27 @@ void vp_rk_first_yolo26::run_infer_combinations(
     }
 
     start_time = std::chrono::system_clock::now();
+    if (!frame_meta->yolo26_input_ready || frame_meta->yolo26_input_rgb_data.empty()) {
+        VP_WARN(vp_utils::string_format("[%s] yolo26 input is not ready, drop frame=%d",
+                                        node_name.c_str(),
+                                        frame_meta->frame_index));
+        return;
+    }
+    const size_t expected_input_bytes =
+        static_cast<size_t>(frame_meta->yolo26_input_width) * static_cast<size_t>(frame_meta->yolo26_input_height) * 3U;  // 期望输入字节数。
+    if (frame_meta->yolo26_input_rgb_data.size() != expected_input_bytes) {
+        VP_WARN(vp_utils::string_format("[%s] yolo26 input bytes mismatch, got=%zu expect=%zu frame=%d",
+                                        node_name.c_str(),
+                                        frame_meta->yolo26_input_rgb_data.size(),
+                                        expected_input_bytes,
+                                        frame_meta->frame_index));
+        return;
+    }
+
+    const int orig_w = frame_meta->original_width > 0 ? frame_meta->original_width : mats_to_infer[0].cols;  // 原始图像宽度。
+    const int orig_h = frame_meta->original_height > 0 ? frame_meta->original_height : mats_to_infer[0].rows;  // 原始图像高度。
     std::vector<DetectionResult> res;  // 检测结果。
-    rk_model->run(mats_to_infer[0], res);
+    rk_model->run(frame_meta->yolo26_input_rgb_data.data(), orig_w, orig_h, res);
     auto infer_time = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now() - start_time);  // infer 耗时。
 

@@ -1,5 +1,5 @@
 {
-    "model_path": "/mnt/nfs/weights/rk3588/yolo26n_352_2c_2.rknn",
+    "model_path": "/mnt/nfs/weights/rk3588/yolo26n_352_2c_no-p2.rknn",
     "labels": ["bird", "uav"],
     "alarm_labels": ["bird", "uav"],
     "model_type": "YOLO26",
@@ -7,5 +7,6 @@
     "input_height": 352,
     "conf_threshold": 0.5,
     "nms_threshold": 0.45,
-    "infer_skip_frames": 5
+    "infer_skip_frames": 0,
+    "preprocess_debug_log_interval": 300
 }

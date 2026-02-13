@@ -22,7 +22,11 @@ namespace vp_objects {
         frame_index(meta.frame_index),
         original_width(meta.original_width),
         original_height(meta.original_height),
-        fps(meta.fps) {
+        fps(meta.fps),
+        yolo26_input_rgb_data(meta.yolo26_input_rgb_data),
+        yolo26_input_ready(meta.yolo26_input_ready),
+        yolo26_input_width(meta.yolo26_input_width),
+        yolo26_input_height(meta.yolo26_input_height) {
             // deep copy frame data
             this->frame = meta.frame.clone();
             this->osd_frame = meta.osd_frame.clone();

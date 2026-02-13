@@ -6,8 +6,6 @@
 #include <map>
 #include <utility>
 
-#include <opencv2/imgproc.hpp>
-
 YOLO26::YOLO26(const YOLO26Config& config) : RKBASE(config.model_path), config(config) {
     // 使用模型真实输入尺寸，避免配置尺寸与模型不一致导致越界访问。
     this->config.input_width = model_width;
@@ -108,23 +106,16 @@ bool YOLO26::output_to_chw(const rknn_output& output, const rknn_tensor_attr& at
     return false;
 }
 
-void YOLO26::run(const cv::Mat& src, std::vector<DetectionResult>& res) {
+void YOLO26::run(const uint8_t* model_input_rgb, int orig_w, int orig_h, std::vector<DetectionResult>& res) {
     res.clear();
-    if (src.empty()) {
+    if (model_input_rgb == nullptr || orig_w <= 0 || orig_h <= 0) {
         return;
     }
 
-    const int orig_w = src.cols;  // 原图宽度。
-    const int orig_h = src.rows;  // 原图高度。
     const float ratio_w = static_cast<float>(config.input_width) / static_cast<float>(orig_w);  // 宽方向缩放比。
     const float ratio_h = static_cast<float>(config.input_height) / static_cast<float>(orig_h);  // 高方向缩放比。
 
-    cv::Mat rgb_img;  // RGB 图像。
-    cv::cvtColor(src, rgb_img, cv::COLOR_BGR2RGB);
-    cv::Mat resized_rgb;  // 缩放后的 RGB 图像。
-    cv::resize(rgb_img, resized_rgb, cv::Size(config.input_width, config.input_height), 0, 0, cv::INTER_LINEAR);
-
-    inputs[0].buf = resized_rgb.data;
+    inputs[0].buf = const_cast<uint8_t*>(model_input_rgb);
     ret = rknn_inputs_set(ctx, io_num.n_input, inputs);
     if (ret < 0) {
         return;
@@ -195,13 +186,3 @@ void YOLO26::run(const cv::Mat& src, std::vector<DetectionResult>& res) {
     postprocessor->run(heads, orig_w, orig_h, ratio_w, ratio_h, res);
     rknn_outputs_release(ctx, io_num.n_output, outputs.data());
 }
-
-void YOLO26::run(std::vector<cv::Mat>& img_datas, std::vector<std::vector<DetectionResult>>& res_datas) {
-    res_datas.clear();
-    for (auto& image : img_datas) {
-        std::vector<DetectionResult> single_res;  // 单帧结果。
-        run(image, single_res);
-        res_datas.push_back(single_res);
-    }
-}
-
