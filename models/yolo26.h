@@ -1,10 +1,9 @@
 #pragma once
 
 #include <memory>
+#include <cstdint>
 #include <string>
 #include <vector>
-
-#include <opencv2/core.hpp>
 
 #include "rkbase.h"
 #include "yolo26_post.h"
@@ -35,17 +34,12 @@ public:
 
     /**
      * @brief 单帧推理。
-     * @param src 输入 BGR 图像。
+     * @param model_input_rgb 输入预处理后的 RGB 字节缓冲（NHWC uint8）。
+     * @param orig_w 原始图宽度。
+     * @param orig_h 原始图高度。
      * @param res 输出检测结果。
      */
-    void run(const cv::Mat& src, std::vector<DetectionResult>& res);
-
-    /**
-     * @brief 多帧推理（顺序逐帧执行）。
-     * @param img_datas 输入图像列表。
-     * @param res_datas 输出结果列表。
-     */
-    void run(std::vector<cv::Mat>& img_datas, std::vector<std::vector<DetectionResult>>& res_datas);
+    void run(const uint8_t* model_input_rgb, int orig_w, int orig_h, std::vector<DetectionResult>& res);
 
 private:
     /**
@@ -61,4 +55,3 @@ private:
     YOLO26Config config;  // YOLO26 运行配置。
     std::unique_ptr<Yolo26PostProcessor> postprocessor;  // 后处理对象。
 };
-

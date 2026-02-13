@@ -55,6 +55,15 @@ namespace vp_objects {
         // deep copy needed here for this member.
         cv::Mat frame;
 
+        // YOLO26 预处理后的 RGB 输入字节缓冲（NHWC）。
+        std::vector<uint8_t> yolo26_input_rgb_data;
+        // YOLO26 预处理结果是否可用。
+        bool yolo26_input_ready = false;
+        // YOLO26 预处理输入宽度。
+        int yolo26_input_width = 0;
+        // YOLO26 预处理输入高度。
+        int yolo26_input_height = 0;
+
         // osd image data the meta holds, filled by osd node if exists.
         // deep copy needed here for this member.
         cv::Mat osd_frame;

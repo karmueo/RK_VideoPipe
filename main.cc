@@ -13,6 +13,7 @@
 #include <unistd.h>
 
 #include "nodes/infer/vp_rk_first_yolo26.h"
+#include "nodes/infer/vp_yolo26_preprocess_node.h"
 #include "nodes/osd/vp_osd_node.h"
 #include "nodes/vp_bgr_to_nv12_node.h"
 #include "nodes/vp_mpp_sdl_src_node.h"
@@ -160,7 +161,7 @@ static void parse_args(int argc,
 /**
  * @brief 主程序入口，构建线性视频管线。
  *
- * `src -> nv12_to_bgr -> yolo26 -> osd -> bgr_to_nv12 -> nv12_sdl_des`。
+ * `src -> nv12_to_bgr -> yolo26_preprocess -> yolo26 -> osd -> bgr_to_nv12 -> nv12_sdl_des`。
  *
  * @param argc 参数个数。
  * @param argv 参数数组。
@@ -211,6 +212,8 @@ int main(int argc, char** argv) {
 
     // NV12 转 BGR 适配节点（供推理/OSD/stream 链路使用）。
     auto nv12_to_bgr_0 = std::make_shared<vp_nodes::vp_nv12_to_bgr_node>("nv12_to_bgr_0");
+    // YOLO26 预处理节点（BGR->RGB + resize，支持 rga/opencv）。
+    auto yolo26_pre_0 = std::make_shared<vp_nodes::vp_yolo26_preprocess_node>("yolo26_pre_0", yolo26_config_path);
     // YOLO26 检测节点。
     auto yolo26_0 = std::make_shared<vp_nodes::vp_rk_first_yolo26>("yolo26_0", yolo26_config_path);
     // OSD 绘制节点。
@@ -227,7 +230,8 @@ int main(int argc, char** argv) {
 
     // 业务主链路（保持检测/OSD处理结构，输出改为 SDL NV12 显示）。
     nv12_to_bgr_0->attach_to({src_0});
-    yolo26_0->attach_to({nv12_to_bgr_0});
+    yolo26_pre_0->attach_to({nv12_to_bgr_0});
+    yolo26_0->attach_to({yolo26_pre_0});
     osd_0->attach_to({yolo26_0});
     bgr_to_nv12_0->attach_to({osd_0});
     nv12_des_0->attach_to({bgr_to_nv12_0});
