@@ -69,7 +69,6 @@ Testing/
 .cache/
 build
 mpp
-rknn-toolkit2
 log/*
 .vscode/
 *.png
