@@ -1,7 +1,7 @@
 {
-    "model_path": "/mnt/nfs/weights/rk3588/yolo26n_352_2c_no-p2.rknn",
-    "labels": ["bird", "uav"],
-    "alarm_labels": ["bird", "uav"],
+    "model_path": "/mnt/nfs/weights/rk3588/yolo26n_352_1c_no-p2.rknn",
+    "labels": ["uav"],
+    "alarm_labels": ["uav"],
     "model_type": "YOLO26",
     "input_width": 640,
     "input_height": 352,

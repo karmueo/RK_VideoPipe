@@ -206,7 +206,7 @@ int main(int argc, char** argv) {
         0,                // channel_index：通道索引。
         file_path,        // file_path：输入视频路径。
         true,             // cycle：是否循环播放。
-        false             // pace_by_src_fps：是否按源帧率限速。
+        true             // pace_by_src_fps：是否按源帧率限速。
     );
 
     // YOLO26 预处理节点（直接处理 NV12，内部产出 BGR 与模型输入 RGB）。

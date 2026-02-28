@@ -17,7 +17,7 @@ if [[ ! -x "${BIN_PATH}" ]]; then
   exit 1
 fi
 
-VIDEO_PATH="${1:-/mnt/nfs/datasets/video/uav.mp4}"
+VIDEO_PATH="${1:-/mnt/nfs/datasets/video/uav6.mp4}"
 SDL_VIDEO_DRIVER="${2:-}"
 SDL_RENDER_DRIVER="${3:-}"
 YOLO26_CFG="${4:-${ROOT_DIR}/assets/configs/yolo26.json}"
